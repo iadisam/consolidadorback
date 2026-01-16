@@ -507,53 +507,51 @@ async def download_consolidated_file(result_id: str):
 
 @app.post("/api/consolidate/validate")
 async def validate_template_version(file: UploadFile = File(...)):
-    """
-    Recibe el Excel lleno y valida que la versión en AB9 sea correcta.
-    """
-    # 1. Validar extensión
-    if not allowed_file(file.filename):
-        raise HTTPException(status_code=400, detail="Extensión de archivo no válida.")
-
     try:
-        # Guardar temporalmente para procesar con openpyxl
+        # 1. Guardar temporalmente
         temp_path = os.path.join(UPLOAD_FOLDER, f"val_{uuid.uuid4().hex}_{file.filename}")
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # 2. Cargar el libro (data_only=True para obtener el valor calculado/texto)
-        wb = openpyxl.load_workbook(temp_path, data_only=True)
-        sheet = wb.active # O wb.worksheets[0] para asegurar la primera hoja
+        # 2. Cargar con data_only=True para leer el texto final
+        # keep_vba=True es opcional pero recomendado para archivos .xlsm
+        wb = openpyxl.load_workbook(temp_path, data_only=True, keep_vba=True)
         
-        # 3. Obtener valor de AB9
-        # Aunque sea celda combinada A9:B9, openpyxl lee el valor en la celda superior izquierda (A9)
-        # pero según tu requerimiento el campo se identifica como AB9 o la unión de A y B en fila 9.
-        # Validamos el contenido en la celda A9 (que representa el bloque combinado).
-        version_value = sheet["A9"].value 
+        # 3. Acceder específicamente a la primera pestaña por nombre o índice
+        # Tu archivo tiene la pestaña "IDENTIFICACIÓN" como la primera
+        sheet = wb.worksheets[0] 
+        
+        # 4. Leer A9 (Celda maestra de la combinación A9:B9)
+        valor_celda = sheet["A9"].value
+        version_encontrada = str(valor_celda).strip() if valor_celda else ""
 
         wb.close()
-        os.remove(temp_path) # Limpiar
+        os.remove(temp_path)
 
-        # 4. Validación lógica
-        expected_version = "Versión 1.1: Febrero 2026"
+        # 5. Comparación exacta
+        VERSION_ESPERADA = "Versión 1.1: Febrero 2026"
         
-        if version_value != expected_version:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Versión incorrecta. Se esperaba '{expected_version}' pero se encontró '{version_value}'"
+        if version_encontrada == VERSION_ESPERADA:
+            return {
+                "status": "success",
+                "message": "Validación exitosa: La plantilla es la correcta.",
+                "version": version_encontrada
+            }
+        else:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "detail": "La versión del documento no coincide.",
+                    "encontrado": version_encontrada,
+                    "esperado": VERSION_ESPERADA
+                }
             )
 
-        return {
-            "status": "success",
-            "message": "Documento validado correctamente",
-            "version": version_value,
-            "filename": file.filename
-        }
-
-    except HTTPException as he:
-        raise he
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al validar: {str(e)}")
-
+        if 'temp_path' in locals() and os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
 # ==================== UTILITY ENDPOINTS ====================
 
 @app.get("/api/health")
