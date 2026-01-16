@@ -505,6 +505,54 @@ async def download_consolidated_file(result_id: str):
         media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
 
+@app.post("/api/consolidate/validate")
+async def validate_template_version(file: UploadFile = File(...)):
+    """
+    Recibe el Excel lleno y valida que la versión en AB9 sea correcta.
+    """
+    # 1. Validar extensión
+    if not allowed_file(file.filename):
+        raise HTTPException(status_code=400, detail="Extensión de archivo no válida.")
+
+    try:
+        # Guardar temporalmente para procesar con openpyxl
+        temp_path = os.path.join(UPLOAD_FOLDER, f"val_{uuid.uuid4().hex}_{file.filename}")
+        with open(temp_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        # 2. Cargar el libro (data_only=True para obtener el valor calculado/texto)
+        wb = openpyxl.load_workbook(temp_path, data_only=True)
+        sheet = wb.active # O wb.worksheets[0] para asegurar la primera hoja
+        
+        # 3. Obtener valor de AB9
+        # Aunque sea celda combinada A9:B9, openpyxl lee el valor en la celda superior izquierda (A9)
+        # pero según tu requerimiento el campo se identifica como AB9 o la unión de A y B en fila 9.
+        # Validamos el contenido en la celda A9 (que representa el bloque combinado).
+        version_value = sheet["A9"].value 
+
+        wb.close()
+        os.remove(temp_path) # Limpiar
+
+        # 4. Validación lógica
+        expected_version = "Versión 1.1: Febrero 2026"
+        
+        if version_value != expected_version:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Versión incorrecta. Se esperaba '{expected_version}' pero se encontró '{version_value}'"
+            )
+
+        return {
+            "status": "success",
+            "message": "Documento validado correctamente",
+            "version": version_value,
+            "filename": file.filename
+        }
+
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al validar: {str(e)}")
 
 # ==================== UTILITY ENDPOINTS ====================
 
