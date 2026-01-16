@@ -552,6 +552,65 @@ async def validate_template_version(file: UploadFile = File(...)):
         if 'temp_path' in locals() and os.path.exists(temp_path):
             os.remove(temp_path)
         raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
+    
+@app.post("/api/consolidate/audit")
+async def audit_template_changes(file: UploadFile = File(...)):
+    # 1. Ruta de la plantilla original (ajusta la ruta si es necesario)
+    master_template_path = os.path.join(os.getcwd(), "SA_26_V1.1.xlsm")
+    
+    if not os.path.exists(master_template_path):
+        raise HTTPException(status_code=500, detail="No se encuentra la plantilla maestra en el servidor para comparar.")
+
+    try:
+        # 2. Leer el archivo subido por el usuario en memoria
+        user_contents = await file.read()
+        from io import BytesIO
+        wb_user = openpyxl.load_workbook(BytesIO(user_contents), data_only=True)
+        
+        # 3. Leer la plantilla maestra
+        wb_master = openpyxl.load_workbook(master_template_path, data_only=True)
+        
+        cambios = []
+
+        # 4. Recorrer las hojas (puedes limitar a las que te interesen)
+        # Por ahora recorremos todas las hojas que existan en ambos
+        for sheet_name in wb_master.sheetnames:
+            if sheet_name not in wb_user.sheetnames:
+                continue
+                
+            ws_master = wb_master[sheet_name]
+            ws_user = wb_user[sheet_name]
+
+            # Recorrer el rango usado en la plantilla maestra
+            for row in ws_master.iter_rows(min_row=1, max_col=ws_master.max_column, max_row=ws_master.max_row):
+                for cell in row:
+                    coord = cell.coordinate
+                    valor_maestro = cell.value
+                    valor_usuario = ws_user[coord].value
+
+                    # Comparar valores (ignorando espacios en blanco extra)
+                    if str(valor_usuario).strip() != str(valor_maestro).strip():
+                        # Solo registrar si el usuario escribió algo donde antes no había nada 
+                        # o si cambió un valor existente
+                        if valor_usuario is not None:
+                            cambios.append({
+                                "hoja": sheet_name,
+                                "celda": coord,
+                                "valor_original": valor_maestro,
+                                "valor_nuevo": valor_usuario
+                            })
+
+        wb_user.close()
+        wb_master.close()
+
+        return {
+            "status": "success",
+            "total_cambios": len(cambios),
+            "cambios": cambios
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error en la auditoría: {str(e)}")
 # ==================== UTILITY ENDPOINTS ====================
 
 @app.get("/api/health")
